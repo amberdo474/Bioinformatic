@@ -1,8 +1,8 @@
-#PS1 , due 1/18/23. by 12. midnight
+PS!
 
 
 
-## Q1 -3pt
+## Q1 
 ## Write a function that will simulate the number of tails in a series of coin tosses.
 ## The input to the function is the number of coin tosses
 ## The output should be a single number equivalent to the number of tails in the series
@@ -21,7 +21,7 @@ number_of_tails = function(coin_tosses) {
 #number_of_tails(5)
 
 
-## Q2 -3pt
+## Q2
 ## Using the function you wrote in Q2, generate 5000 experiments each with 40 coin tosses
 ## Plot the distribution of the outputs as a histogram
 output_sample_store <- c(1:5000)
