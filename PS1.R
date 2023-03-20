@@ -1,6 +1,4 @@
-PS!
-
-
+PS1
 
 ## Q1 
 ## Write a function that will simulate the number of tails in a series of coin tosses.
