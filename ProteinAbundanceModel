@@ -1,0 +1,348 @@
+
+# There are 4 steps: 
+# 1, process data (already done)
+# 2, split data (train and test)
+# 3, build model (using algorithm like forest tree to learn from train data)
+# 4, evaluate model using test data. 
+
+# countPerMillion: 
+BiocManager::install("M3C")
+library(M3C)
+library(limma)
+library(edgeR)
+
+# Step 1: prepare data
+
+# y (outcome) - our protein abundance dataset
+load("/Users/amberdo/Documents/final/datasets/prot_train.rda")
+
+# load files sequence, rna, ribo 
+sequence = readLines("/Users/amberdo/Documents/final/datasets/mRNA_sequences.fa")
+load("/Users/amberdo/Documents/final/datasets/rna_cl_train.rda")
+load("/Users/amberdo/Documents/final/datasets/ribo_cl_train.rda")
+
+# normalization of rna and ribo, 
+nor_rna = cpm(rna_cl_train)
+nor_ribo = cpm(ribo_cl_train)
+
+# bind column 
+# average 30 samples to each cell line for total of 6 cell lines
+human_infor_train = read.csv( "/Users/amberdo/Documents/final/datasets/human_infor_train.csv" )
+
+#RegionLengths.bed
+x = "/Users/amberdo/Documents/final/datasets/RegionLengths.bed"
+bed <- as.data.frame(read.table(x,header = FALSE, sep="\t",stringsAsFactors=FALSE, quote=""))
+
+
+cell_lines = c( "A549", "HeLa", "HepG2", "K562", "MCF7", "U2OS" ) 
+# separate them into samples using list  
+
+# combine samples within the same cell line into a group, stored in a list
+group_cell_lines = list()
+for ( i in 1: length(cell_lines) ) {
+  cell  = human_infor_train[ human_infor_train$cell_line == cell_lines[i], ]
+  group_cell_lines[[i]] = cell
+}
+View(group_cell_lines)
+
+
+# function to average grouped samples into 1 column value for each cell line instead of 30 samples 
+# return a vector of genes within 1 cell line that represent the average of samples within that cell line
+combine_samples = function( nor_frame, cell ) {
+  
+  # collapse those samples into 1 cell line by mean of cpm on nor_rna and nor_ribo
+  test = nor_frame[  , cell$experiment_alias ]
+  
+  if ( is.null(ncol(test) ) ) {
+    return (test)
+  }
+  
+  # average of all col , each row has its own value
+  result = c()
+  for ( i in 1:nrow(test) ) {
+    # each row 
+    result = c(result, mean( test[i, ] ) )
+  }
+  return (result)
+}
+
+
+# construct a list of above function to return the same result for 6 cell lines.
+group_samples_rna = list()
+for ( i in 1:length(cell_lines) ) {1
+  group_samples_rna[[i]] = combine_samples( nor_rna, (group_cell_lines[[i]]) )
+  
+}
+# test code: 
+# x = combine_samples(my[[4]])
+
+# construct a normalized data frame of rna with average samples for each cell line 
+rna = data.frame( group_samples_rna[[1]],  
+                  group_samples_rna[[2]],
+                  group_samples_rna[[3]],
+                  group_samples_rna[[4]],
+                  group_samples_rna[[5]],
+                  group_samples_rna[[6]] )
+
+colnames(rna) = cell_lines 
+View(rna)
+
+# save this file as csv file, TA can load it without having to wait. 
+write.csv(rna, "rna.csv", row.names= row.names(rna))
+
+
+
+
+# let's do that for ribo data frame as well 
+# construct a data.frame for ribo (normalized and average)
+group_samples_ribo = list()
+for ( i in 1: length(cell_lines) ) {
+  group_samples_ribo [[i]] = combine_samples(nor_ribo, (group_cell_lines[[i]]) )
+  
+}
+ribo = data.frame( group_samples_ribo[[1]],  
+                   group_samples_ribo[[2]],
+                   group_samples_ribo[[3]],
+                   group_samples_ribo[[4]],
+                   group_samples_ribo[[5]],
+                   group_samples_ribo[[6]] )
+
+colnames(ribo) = cell_lines 
+View(ribo)
+
+write.csv(ribo, "ribo.csv", row.names= row.names(ribo))
+
+
+
+# clean up the sequence file:
+# step 1: put into dataframe
+# step 2: select only wanted gene
+# step 3: remove any duplicate from the gene names so that we only want those exact 4331 genes to analyze
+
+
+# let's try on sequence, extract only relevant genes, 4331 genes
+genes = row.names(prot_train)
+
+# loop through sequence
+extract_genes = function(sequence) {
+  # if 1, 3, 5, then that's a gene name, form ">OR4F5" 
+  # if 2, 4, 6, then that's a sequence, form "TCCTGGAATGAATCAACGAGTG"
+  # put them into a data_frame, so you can extract the one you need
+  
+  sequence_dataframe = data.frame()
+  
+  # return data.frame that does [gene, 'ACGCACG']
+  count = 1
+  
+  while ( count <= length(sequence) ) {
+    x = sequence[count]
+    sequence_dataframe = rbind(sequence_dataframe, c( ( substr(x, 2, nchar(x)) ), sequence[count + 1] ))
+    count = count + 2
+  }
+  colnames(sequence_dataframe) = c('gene', 'sequence')
+  
+  return ( sequence_dataframe )
+}
+
+# put sequence into data.frame
+s_frame = extract_genes(sequence)
+
+
+# needed gene, 
+seq_needed = s_frame[ s_frame$gene %in% genes, ]
+
+
+# remove the duplicate gene 
+#seq_needed = seq_needed[ !( ) , ]
+x = seq_needed [ seq_needed$gene == 'PINX1' , ]
+# remove 1 duplicate , run above code, --> 7984, 7985 , remove 1 of them, choose 7985
+
+seq_needed = seq_needed [ row.names(seq_needed) != ('7985') ,  ]
+
+# rowNames and remove 1st columne , sort into order that match Target for protein abundance
+#rownames(seq_needed) = seq_needed$gene
+
+# to sort into a order of a vector name, that match protein abundance prediction 
+?order 
+seq_needed = seq_needed[ order( match(seq_needed$gene, genes)),   ]
+
+
+# now, try to figure out amino acids
+
+# use Bio-string to translate, codon 
+install.packages('Biostrings')
+
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("Biostrings")
+library('Biostrings')
+
+
+# only want the V4 column that is CDS (reading region)
+bed1 = bed[ bed$V4 == 'CDS', ]
+#> nrow(bed1)
+#[1] 19736
+
+# i need only the gene that i care 
+bed1 = bed1[ bed1$V1 %in% genes,  ]
+# > nrow(bed1)
+# [1] 4332
+
+# assign rowname first
+#rownames(bed1) = bed1$V1
+
+# check for name duplicate ‘PINX1’ 
+x = bed1 [ bed1$V1 == 'PINX1' , ]
+#          V1  V2   V3  V4
+#23686 PINX1  91 1411 CDS
+#23689 PINX1 119 1103 CDS
+
+# remove 23689
+# remove the repeated row, 
+bed1 = bed1 [ row.names(bed1) != ('23689') ,  ]
+
+# sort my data.frame to order of vector genes,
+bed1 = bed1[ order( match(bed1$V1, genes)),   ]
+
+
+
+# how to perform codon counting on all genes, total of 
+# t is my data.frame for codons with sorted order similar to prot_train
+
+counts = rep(0, 64)
+
+##### let use trinucleotideFrequency from the package to count AAA
+
+start.time <- Sys.time()
+
+seq_df = t ( data.frame( 1:64  ) ) 
+
+View(seq_df)
+# test for alignment 
+# bed1$V1[4] == seq_needed$gene[4]
+
+for ( i in 1: nrow(bed1)  ) {
+  
+  cur = seq_needed$sequence[i]
+  cur_bed = bed1[i, ]
+  # bed V2 + 1 to V3
+  
+  start = (cur_bed$V2) + 1
+  stop = cur_bed$V3
+  
+  s = substr( cur, start, stop  )
+  
+  tri_freq_orf = trinucleotideFrequency(DNAString(s), step = 3)
+  
+  # bind to each other 
+  seq_df = rbind(seq_df, tri_freq_orf)
+}
+
+
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+print( time.taken )
+
+
+nrow(seq_df)
+#[1] 4332, b/c 1st row is the initial condition
+seq_df = seq_df[-1, ]
+rownames(seq_df) = genes
+seq_df = data.frame(seq_df)
+
+write.csv(seq_df, "seq_df.csv", row.names = TRUE)
+
+
+installed.packages('dplyr')
+# after split, let's predict the model for A549 cell lines. 
+
+## Introduction to RandomForest
+install.packages("randomForest")
+library(randomForest)
+
+
+View(ribo)
+View(rna)
+View(seq_df)
+
+# count for the total codons in the reading frame region for each gene
+num_codons <- sapply( 1:nrow(seq_df), function(i) rowSums( seq_df[i, ])) 
+
+
+binded_df1 = data.frame( cbind(  Target = prot_train$A549, rna = rna$A549, ribo = ribo$A549, num_codons
+                                 , seq_df) )
+
+binded_df2 = data.frame( cbind(   Target = prot_train$HeLa, rna = rna$HeLa, ribo = ribo$HeLa, num_codons
+                                  , seq_df) )
+binded_df3 = data.frame( cbind(   Target = prot_train$HepG2, rna = rna$HepG2, ribo = ribo$HepG2, num_codons
+                                  , seq_df) )
+binded_df4 = data.frame( cbind(   Target = prot_train$K562, rna = rna$K562, ribo = ribo$K562, num_codons
+                                  , seq_df) )
+binded_df5 = data.frame( cbind(  Target = prot_train$MCF7, rna = rna$MCF7, ribo = ribo$MCF7, num_codons 
+                                 , seq_df) )
+binded_df6 = data.frame( cbind(  Target = prot_train$U2OS, rna = rna$U2OS, ribo = ribo$U2OS, num_codons
+                                 , seq_df) )
+binded_all = rbind(binded_df1, 
+                   binded_df2,
+                   binded_df3,
+                   binded_df4,
+                   binded_df5 )
+
+
+# expect to return a complete dataframe (contains: Target, rna, ribo, num_codons, and 64 codons count)
+train_model = binded_all
+
+# example of test model is U2OS cell line, and so after running these raw data, the output should be similar to 
+# binded_df6, but anyone should be able to test the model by replacing their raw rna_cl_train, raw ribo_cl_train, and raw prot_train
+# with raw_rna, raw_ribo, and raw_target to generate test model and check for correlation
+# to see how good the model perform. 
+
+## so comment those 3 lines out, and replace with new samples.
+raw_rna = rna_cl_train[ , group_cell_lines[[6]]$experiment_alias ]
+raw_ribo = ribo_cl_train[ , group_cell_lines[[6]]$experiment_alias ]
+raw_target = prot_train[ , 'U2OS']
+
+# return a big dataframe as test model, 
+construct_test_model = function( codons = seq_df, num_codons, raw_rna, raw_ribo, raw_target ) {
+  # just normalize raw rna and ribo, and combined it into 1 column from each variables, then bind to a data.frame
+  # ex: small_ribo = ribo_cl_train[, ]
+  #train  = sample(nrow(prot_sec_data_std), size = floor(nrow(prot_sec_data_std)*.1 ) )
+  #test =  setdiff(1:nrow(prot_sec_data_std), train  
+  # normalize them : raw_rna, and raw_ribo
+  nor_rna = cpm(raw_rna)
+  nor_ribo = cpm(raw_ribo)
+  
+  # combine into 1 col for each 
+  new_rna = apply(nor_rna, 1, mean)
+  new_ribo = apply(nor_ribo, 1, mean)
+  
+  binded_df = data.frame( cbind(  Target = raw_target, rna = new_rna, ribo = new_ribo, num_codons
+                                  , seq_df) )
+  return ( binded_df )
+}
+
+# construct the test model, with new input, try to swap out the model , all are data.frame, so make a bigger data.frame
+test_model = construct_test_model( seq_df, num_codons, raw_rna, raw_ribo, raw_target ) 
+
+# run both model for correlation. return cor(train_model, test_model) using random Forest
+
+# step 3: build a model using random forest for linear regression 
+start.time <- Sys.time()
+rf = randomForest( Target ~ . , data = train_model, importance = TRUE )
+  
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+print(time.taken)
+  
+# step 4: evaluate the model: 
+rf_pred = predict(rf, test_model)
+print( cor.test(rf_pred, test_model$Target)  )
+  
+importance (rf)
+varImpPlot(rf)
+
+##       cor 
+## 0.8703671 
